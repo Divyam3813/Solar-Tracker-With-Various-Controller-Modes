@@ -1,6 +1,6 @@
 # ☀️ Solar Tracker Control Studio
 
-[![Streamlit App](https://img.shields.io/badge/Streamlit-Live%20App-ff4b4b?style=for-the-badge&logo=streamlit&logoColor=white)](YOUR_LIVE_APP_LINK_HERE)
+[![Streamlit App](https://img.shields.io/badge/Streamlit-Live%20App-ff4b4b?style=for-the-badge&logo=streamlit&logoColor=white)](https://solar-tracker.streamlit.app/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
@@ -11,7 +11,7 @@
 ## 🌐 Live Application
 
 Experience the live interactive studio directly in your browser:
-* **[Access Solar Tracker Control Studio Here](YOUR_LIVE_APP_LINK_HERE)**
+* **[Access Solar Tracker Control Studio Here](https://solar-tracker.streamlit.app/)**
 
 ---
 
