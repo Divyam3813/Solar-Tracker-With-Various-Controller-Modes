@@ -7,7 +7,7 @@ import os
 
 import streamlit as st
 
-DEFAULT_MODELS = ("gemini-flash-latest", "gemini-2.5-flash")
+DEFAULT_MODELS = ("gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash")
 MAX_TURNS = 12
 
 PROFILE = """\
