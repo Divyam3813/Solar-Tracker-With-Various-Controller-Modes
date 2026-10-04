@@ -4,6 +4,7 @@ The API key is read from Streamlit secrets (GEMINI_API_KEY) or the environment, 
 Optional secret GEMINI_MODEL overrides the model; otherwise the models in DEFAULT_MODELS are tried in order.
 """
 import os
+import time
 
 import streamlit as st
 
@@ -63,7 +64,7 @@ def get_secret(name):
     """Streamlit secret first, then environment variable."""
     try:
         return st.secrets.get(name) or os.environ.get(name)
-    except Exception:                      # no secrets file
+    except Exception:                     # no secrets file
         return os.environ.get(name)
 
 
@@ -76,24 +77,51 @@ def ask(history, question, state, api_key, models=None):
     """Return (answer, error). `history` is a list of {'role': 'user' | 'assistant', 'content': text}."""
     if not api_key:
         return None, "No GEMINI_API_KEY found in the app's secrets."
+    
     contents = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]}
                 for m in history[-MAX_TURNS:]]
     contents.append({"role": "user", "parts": [{"text": question}]})
     config = {"system_instruction": build_system_prompt(state), "temperature": 0.4}
+    
     try:
         client = _client(api_key)
     except Exception as exc:
         return None, f"Could not start the Gemini client: {exc}"
 
     error = None
-    for model in models or DEFAULT_MODELS:             # try the next model only if this one does not exist
-        try:
-            answer = (client.models.generate_content(model=model, contents=contents, config=config).text or "").strip()
-            if answer:
-                return answer, None
-            error = "The model returned an empty answer (it may have been blocked by a safety filter)."
-        except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
-            if not any(k in str(exc).lower() for k in ("404", "not found", "not_found", "not supported")):
+    target_models = models or DEFAULT_MODELS
+    
+    for model in target_models:
+        max_retries = 3
+        delay = 2.0
+        
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(model=model, contents=contents, config=config)
+                answer = (response.text or "").strip()
+                if answer:
+                    return answer, None
+                error = "The model returned an empty answer (it may have been blocked by a safety filter)."
+                break  # Don't retry empty answers across attempts for the same model
+            
+            except Exception as exc:
+                err_str = str(exc)
+                err_lower = err_str.lower()
+                error = f"{type(exc).__name__}: {exc}"
+                
+                # Check for 503 Service Unavailable or overloaded signals
+                is_overloaded = "503" in err_str or "unavailable" in err_lower or "high demand" in err_lower
+                
+                if is_overloaded and attempt < max_retries - 1:
+                    time.sleep(delay)
+                    delay *= 2  # Exponential backoff
+                    continue
+                
+                # If it's a model not found / not supported error, break out of retry loop to try the next fallback model
+                if any(k in err_lower for k in ("404", "not found", "not_found", "not supported")):
+                    break
+                
+                # For other persistent errors on this model, break retry loop and try next model or return
                 break
+                
     return None, error
