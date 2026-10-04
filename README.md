@@ -1,9 +1,5 @@
 # ☀️ Solar Tracker Control Studio
 
-[![Streamlit App](https://img.shields.io/badge/Streamlit-Live%20App-ff4b4b?style=for-the-badge&logo=streamlit&logoColor=white)](https://solar-tracker.streamlit.app/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
-
 **Solar Tracker Control Studio** is a fully interactive, browser-based control systems laboratory and simulation suite designed for engineering students, educators, and control practitioners. Built using **Streamlit**, **Plotly**, and the **`python-control`** library, it models a single-axis solar tracking mechanism that follows the sun across the sky ($0^\circ$ east to $180^\circ$ west) under rigorous real-world physical constraints, disturbances, and feedback tuning methodologies.
 
 ---
