@@ -1,14 +1,46 @@
 """Gemini-powered assistant styled on Dr. Dipak Adhyaru's public profile.
 
 The API key is read from Streamlit secrets (GEMINI_API_KEY) or the environment, never from the code.
-Optional secret GEMINI_MODEL overrides the model; otherwise the models in DEFAULT_MODELS are tried in order.
+Optional secret GEMINI_MODEL is tried first. After that the app asks the API which models your key can use,
+ranks them fast-first, and falls back automatically when a model is busy (503), out of quota (429) or slow.
 """
 import os
+import re
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 import streamlit as st
 
-DEFAULT_MODELS = ("gemini-flash-latest", "gemini-3.5-flash")
+# Used only if the live model list cannot be fetched.
+DEFAULT_MODELS = (
+    "gemini-flash-latest",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-pro",
+    "gemma-3-27b-it",
+    "gemma-3-12b-it",
+)
 MAX_TURNS = 12
+
+# ---- speed / fallback settings ----
+HEDGE_S = 4.0            # if a model has not answered in 4 s, start the next one in parallel (first answer wins)
+MAX_PARALLEL = 3         # never have more than 3 requests in flight
+ATTEMPT_TIMEOUT_MS = 20_000   # hard stop for one request
+TOTAL_BUDGET_S = 45.0    # give up after this long overall
+MAX_CANDIDATES = 8       # how many models to try at most
+COOLDOWN_BUSY_S = 60     # skip a model for 60 s after a 503 / timeout
+COOLDOWN_QUOTA_S = 600   # skip a model for 10 min after a 429 (quota)
+DISCOVERY_TTL_S = 3600
+SKIP_WORDS = ("embedding", "tts", "image", "imagen", "live", "audio", "veo", "robotics", "computer-use",
+              "aqa", "vision", "learnlm", "thinking-exp", "deep-research", "native")
+
+_cooldown = {}                              # model -> time until which it is skipped
+_discovered = {"t": 0.0, "models": []}
+LAST_MODEL = None                           # which model answered last (handy for a caption in the UI)
 
 PROFILE = """\
 - Professor, Department of Electronics & Instrumentation (EI) Engineering, Institute of Technology, Nirma University;
@@ -69,31 +101,148 @@ def get_secret(name):
 
 def _client(api_key):
     from google import genai
-    return genai.Client(api_key=api_key)
+    from google.genai import types
+    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=ATTEMPT_TIMEOUT_MS))
 
 
+# ---------------------------------------------------------------- model discovery and ranking
+def _rank(name):
+    """Sort key: plain flash first, then flash-lite, then pro, then Gemma. Stable before preview, newer before older."""
+    n = name.lower()
+    if n.startswith("gemma"):
+        tier = 4
+    elif "pro" in n:
+        tier = 3
+    elif "lite" in n:
+        tier = 2
+    elif "flash" in n:
+        tier = 0
+    else:
+        tier = 5
+    preview = 1 if any(w in n for w in ("preview", "exp")) else 0
+    not_alias = 0 if "latest" in n else 1                    # '-latest' aliases are stable, so try them first
+    v = re.search(r"(\d+(?:\.\d+)?)", n)
+    return (tier, preview, not_alias, -(float(v.group(1)) if v else 0.0), n)
+
+
+def _available_models(client):
+    """Models this key can call, best-first. Cached for an hour; falls back to DEFAULT_MODELS."""
+    now = time.time()
+    if _discovered["models"] and now - _discovered["t"] < DISCOVERY_TTL_S:
+        return _discovered["models"]
+    found = []
+    try:
+        for m in client.models.list():
+            name = (m.name or "").replace("models/", "")
+            actions = getattr(m, "supported_actions", None) or []
+            if actions and "generateContent" not in actions:
+                continue
+            if not name.startswith(("gemini", "gemma")) or any(w in name for w in SKIP_WORDS):
+                continue
+            found.append(name)
+    except Exception:
+        found = []
+    ordered = sorted(set(found), key=_rank) if found else list(DEFAULT_MODELS)
+    _discovered.update(t=now, models=ordered)
+    return ordered
+
+
+def _candidates(client, preferred):
+    seen, out = set(), []
+    for m in [*(preferred or []), *_available_models(client)]:
+        if m and m not in seen:
+            seen.add(m)
+            out.append(m)
+    now = time.time()
+    ready = [m for m in out if _cooldown.get(m, 0) <= now]
+    cooling = [m for m in out if m not in ready]               # recently failed models only as a last resort
+    return (ready + cooling)[:MAX_CANDIDATES]
+
+
+# ---------------------------------------------------------------- one request
+def _error_kind(exc):
+    text = f"{type(exc).__name__} {exc}"
+    low = text.lower()
+    if "429" in text or "resource_exhausted" in low or "quota" in low or "rate limit" in low:
+        return "quota"
+    if "api key" in low or "api_key_invalid" in low or "401" in text or "403" in text or "permission" in low:
+        return "auth"
+    if "404" in text or "not_found" in low or "not found" in low or "not supported" in low:
+        return "missing"
+    return "busy"                                              # 500/502/503/504, timeouts, empty answers, anything else
+
+
+def _call(client, model, turns, system):
+    from google.genai import types
+    contents = [types.Content(role=r, parts=[types.Part(text=t)]) for r, t in turns]
+    if model.startswith("gemma"):                              # Gemma models do not accept system instructions
+        last = turns[-1][1]
+        contents[-1] = types.Content(role="user", parts=[types.Part(text=f"{system}\n\nStudent question:\n{last}")])
+        config = types.GenerateContentConfig(temperature=0.4)
+    else:
+        config = types.GenerateContentConfig(system_instruction=system, temperature=0.4)
+    resp = client.models.generate_content(model=model, contents=contents, config=config)
+    text = (resp.text or "").strip()
+    if not text:
+        raise RuntimeError("empty answer (possibly blocked by a safety filter)")
+    return text
+
+
+# ---------------------------------------------------------------- public function used by app.py
 def ask(history, question, state, api_key, models=None):
-    """Return (answer, error). `history` is a list of {'role': 'user' | 'assistant', 'content': text}."""
+    """Return (answer, error). `history` is a list of {'role': 'user' | 'assistant', 'content': text}.
+
+    Starts with the best model. If it fails at once (503, 429, 404...) the next model starts immediately.
+    If it is merely slow (HEDGE_S seconds) the next model starts in parallel and the first good answer wins.
+    """
+    global LAST_MODEL
     if not api_key:
         return None, "No GEMINI_API_KEY found in the app's secrets."
-    contents = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]}
-                for m in history[-MAX_TURNS:]]
-    contents.append({"role": "user", "parts": [{"text": question}]})
-    config = {"system_instruction": build_system_prompt(state), "temperature": 0.4}
     try:
         client = _client(api_key)
     except Exception as exc:
         return None, f"Could not start the Gemini client: {exc}"
 
-    error = None
-    for model in models or DEFAULT_MODELS:             # try the next model only if this one does not exist
-        try:
-            answer = (client.models.generate_content(model=model, contents=contents, config=config).text or "").strip()
-            if answer:
-                return answer, None
-            error = "The model returned an empty answer (it may have been blocked by a safety filter)."
-        except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
-            if not any(k in str(exc).lower() for k in ("404", "not found", "not_found", "not supported")):
-                break
-    return None, error
+    system = build_system_prompt(state)
+    turns = [("user" if m["role"] == "user" else "model", m["content"]) for m in history[-MAX_TURNS:]]
+    turns.append(("user", question))
+
+    queue = _candidates(client, list(models) if models else [])
+    if not queue:
+        return None, "No Gemini models available for this API key."
+
+    errors, pending = [], {}
+    pool = ThreadPoolExecutor(max_workers=MAX_PARALLEL)
+    deadline = time.time() + TOTAL_BUDGET_S
+
+    def launch():
+        model = queue.pop(0)
+        pending[pool.submit(_call, client, model, turns, system)] = model
+
+    try:
+        launch()
+        while pending and time.time() < deadline:
+            done, _ = wait(list(pending), timeout=HEDGE_S, return_when=FIRST_COMPLETED)
+            for fut in done:
+                model = pending.pop(fut)
+                try:
+                    text = fut.result()
+                except Exception as exc:                       # noqa: BLE001
+                    kind = _error_kind(exc)
+                    errors.append(f"{model}: {kind}")
+                    if kind == "auth":
+                        return None, f"API key problem: {exc}"
+                    _cooldown[model] = time.time() + {"quota": COOLDOWN_QUOTA_S, "missing": 3600}.get(kind, COOLDOWN_BUSY_S)
+                else:
+                    LAST_MODEL = model
+                    return text, None
+            if queue and len(pending) < MAX_PARALLEL:          # a model failed or is slow: bring in the next one
+                launch()
+        for model in pending.values():                         # timed out while still waiting
+            errors.append(f"{model}: timeout")
+            _cooldown[model] = time.time() + COOLDOWN_BUSY_S
+    finally:
+        pool.shutdown(wait=False)                              # do not wait for slow leftover requests
+
+    return None, ("All Gemini models are busy or out of quota right now. Tried: " + "; ".join(errors)
+                  + ". Please try again in a minute.")
