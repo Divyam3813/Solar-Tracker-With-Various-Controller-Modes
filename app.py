@@ -82,7 +82,7 @@ def style(fig, ytitle, height, title=None, shade=False):
 
 tab_live, tab_sim, tab_der, tab_poles, tab_tuning, tab_chat = st.tabs(
     ["🌞 Live tracker", "📊 Simulation results", "🧮 Plant derivation", "📐 Poles & root locus",
-     "🎚️ Tuning: ZN vs CC", "💬 Ask Dr. Adhyaru"])
+     "🎚️ Tuning: ZN vs CC", "💬 Solar AI Helper"])
 
 # ---------------- Live tracker ----------------
 with tab_live:
@@ -264,11 +264,9 @@ with tab_tuning:
 
 # ---------------- Chatbot ----------------
 with tab_chat:
-    st.subheader("💬 Ask Dr. Dipak Adhyaru (AI assistant)")
-    st.info("This is an **AI assistant** built from Prof. Dipak Adhyaru's public profile (Nirma University). It is not the real "
-            "professor, can make mistakes, and cannot speak for him. Check important answers with your guide.")
-    with st.expander("About Dr. Dipak Adhyaru"):
-        st.markdown(chatbot.PROFILE)
+    st.subheader("💬 Solar AI Helper")
+    st.info("This is an **AI assistant** for the Solar Tracker PID Studio. It can make mistakes, "
+            "so please verify important answers before relying on them.")
     api_key = chatbot.get_secret("GEMINI_API_KEY")
     if not api_key:
         st.warning("No Gemini key found. In Streamlit Cloud open **App → Settings → Secrets** and add:\n\n"
