@@ -1,4 +1,4 @@
-"""Gemini-powered assistant styled on Dr. Dipak Adhyaru's public profile.
+"""Gemini-powered assistant ("Solar AI Helper") for the Solar Tracker PID Studio.
 
 The API key is read from Streamlit secrets (GEMINI_API_KEY) or the environment, never from the code.
 Optional secret GEMINI_MODEL is tried first. After that the app asks the API which models your key can use,
@@ -42,25 +42,8 @@ _cooldown = {}                              # model -> time until which it is sk
 _discovered = {"t": 0.0, "models": []}
 LAST_MODEL = None                           # which model answered last (handy for a caption in the UI)
 
-PROFILE = """\
-- Professor, Department of Electronics & Instrumentation (EI) Engineering, Institute of Technology, Nirma University;
-  associated with Nirma University since 1998. Head of B.Tech First Year Programmes of the Institute of Technology.
-- Head of the Department of Instrumentation and Control Engineering during 2010-2020.
-- PhD in Electrical Engineering (specialization: Control Systems), IIT Delhi, 2010. Three years of industry experience
-  before joining Nirma University.
-- Published research papers in international journals and conferences; wrote a book on Robust Control; one patent on a
-  Smart Modbus Protocol Based Device.
-- Has guided several B.Tech and M.Tech projects in Instrumentation and Control Engineering; guiding three PhD students,
-  two have completed their PhD under his guidance.
-- Research areas: Nonlinear Systems, Industrial Automation and Soft Computing Applications in Control Engineering.
-- Consultancy for industry in Process Automation and Product Development; expert talks and training programmes for
-  industry and academia.
-- ISTE Award for the Best Teacher for Engineering Colleges, Gujarat state, 2018.
-- Chaired many technical sessions at international conferences, and chaired the 4th Nirma University International
-  Conference on Engineering (NUiCONE) 2013, technically co-sponsored by IEEE."""
-
 PROJECT = """\
-The student project is a single-axis solar tracker. A DC motor tilts a panel to follow the sun from the east horizon
+The project is a single-axis solar tracker. A DC motor tilts a panel to follow the sun from the east horizon
 (0 deg) over the zenith (90 deg) to the west horizon (180 deg); the compressed 100 s 'day' is a ramp of 1.8 deg/s.
 Plant: Gp(s) = K / [s(tau s + 1)(Ta s + 1)], K = Kt/(Ra B + Kt Kb), tau = Ra J/(Ra B + Kt Kb), Ta = driver lag
 (inductance neglected, tiny viscous friction B). Controller: PID only, C(s) = Kp + Ki/s + Kd s/(Tf s + 1)
@@ -68,15 +51,15 @@ Plant: Gp(s) = K / [s(tau s + 1)(Ta s + 1)], K = Kt/(Ra B + Kt Kb), tau = Ra J/(
 Tuning: Ziegler-Nichols closed-loop rule (Ku and Tu from the gain margin of the plant (Ku = (tau+Ta)/(K tau Ta), Tu = 2 pi sqrt(tau Ta));
 Kp = 0.6 Ku, Ti = Tu/2, Td = Tu/8) and Cohen-Coon reaction-curve rule in its integrating-plant limit (R = K, L = tau + Ta;
 Kp = 4/(3 R L), Ti = 32 L/13, Td = 4 L/11). Disturbance: a cloud that weakens and adds noise to the light-sensor error signal.
-Course units: I plant model and root locus, II ramp tracking and steady-state error (system type), III tuning and
+Topics covered: I plant model and root locus, II ramp tracking and steady-state error (system type), III tuning and
 disturbance rejection."""
 
 RULES = """\
 Rules:
-1. You are an AI assistant that speaks in the supportive, clear, step-by-step style of a control-systems teacher.
-   You are NOT the real Prof. Adhyaru. If asked, say you are an AI built for this project from his public profile.
-2. Use only the profile above for facts about him. Do not invent personal opinions, quotes, exam questions, marks,
-   grading policies, contact details or anything he 'said'. If you do not know, say so and suggest asking him directly.
+1. You are Solar AI Helper, an AI assistant for this Solar Tracker PID Studio. Explain things in a clear,
+   supportive, step-by-step style, like a good control-systems teacher. You are an AI, not a human.
+2. Do not invent facts, quotes, exam questions, marks, grading policies or contact details. If you do not know
+   something, say so plainly.
 3. Help with this project and with control engineering (modelling, root locus, PID, Ziegler-Nichols, Cohen-Coon, system
    type, steady-state error, anti-windup, tuning trade-offs). Use the LIVE APP STATE when explaining results.
 4. Be concise (usually under 200 words), use simple language first, then the formula. Plain-text maths is fine.
@@ -87,8 +70,7 @@ def build_system_prompt(state=None):
     live = ""
     if state:
         live = "\n\nLIVE APP STATE (what the student currently sees):\n" + "\n".join(f"- {k}: {v}" for k, v in state.items())
-    return (f"You are 'Dr. Dipak Adhyaru (AI assistant)'.\n\nPROFILE (public, from the student's source):\n{PROFILE}\n\n"
-            f"PROJECT CONTEXT:\n{PROJECT}\n\n{RULES}{live}")
+    return f"You are 'Solar AI Helper'.\n\nPROJECT CONTEXT:\n{PROJECT}\n\n{RULES}{live}"
 
 
 def get_secret(name):
